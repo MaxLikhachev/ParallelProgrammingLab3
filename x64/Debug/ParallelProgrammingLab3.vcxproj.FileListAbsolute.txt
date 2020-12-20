@@ -1,0 +1,2 @@
+C:\Users\max14\source\repos\ParallelProgrammingLab3\x64\Debug\ParallelProgrammingLab3.exe
+C:\Users\max14\source\repos\ParallelProgrammingLab3\x64\Debug\ParallelProgrammingLab3.pdb
