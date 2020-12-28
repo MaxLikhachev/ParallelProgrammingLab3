@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <iostream>
+#include <cmath>
 
 using namespace std;
 
@@ -17,7 +18,16 @@ __global__ void addKernel(float*c, const float*a, const float*b)
 {
     int i = threadIdx.x;
     int j = threadIdx.y;
-    c[i * j] = a[i * j] + b[i * j];
+    c[i * j] = sin(a[i * j]) * sin(a[i * j]) + cos(b[i * j]) * cos(b[i * j]) * cos(b[i * j]);
+}
+
+bool isCalculationCorrect(int arraySize, float* c, const float* a, const float* b)
+{
+    bool isError = true;
+    for (int i = 0; i < arraySize && isError; i++)
+        for (int j = 0; j < arraySize && isError; j++)
+            isError = c[i * j] != sin(a[i * j]) * sin(a[i * j]) + cos(b[i * j]) * cos(b[i * j]) * cos(b[i * j]);
+    return isError;
 }
 
 void initRandom(int arraySize, float* a) 
@@ -57,7 +67,7 @@ int main()
     cout << "Enter array size: ";
     int arraySize = 0;
     cin >> arraySize;
-    cout <<  " Array size: " << arraySize << endl;
+    cout <<  "Array size: " << arraySize << endl;
     //const float a[arraySize][arraySize] = {{ 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }};
     //const float b[arraySize][arraySize] = { { 10, 20, 30, 40, 50 }, { 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 }, };
     //float c[arraySize][arraySize] = { {0} };
@@ -85,7 +95,8 @@ int main()
     }
 
     // cout << c[0][0] << c[0][1] << c[0][2] << c[0][3] << c[0][4];
-    display(arraySize, c);
+    // display(arraySize, c);
+    if (!isCalculationCorrect(arraySize, a, b, c)) cout << "Calculation Error\n";
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     cudaStatus = cudaDeviceReset();
