@@ -8,6 +8,9 @@
 
 using namespace std;
 
+#define BLOCK_SIZE 8
+#define N 32
+
 const float degreesToRadiansCoefficient = 0.0174533;
 const int minValue = 0;
 const int maxValue = 360;
@@ -16,8 +19,8 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size);
 
 __global__ void addKernel(float*c, const float*a, const float*b)
 {
-    int i = threadIdx.x;
-    int j = threadIdx.y;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
     c[i * j] = sin(a[i * j]) * sin(a[i * j]) + cos(b[i * j]) * cos(b[i * j]) * cos(b[i * j]);
 }
 
@@ -59,11 +62,6 @@ int main()
 {
     srand(time(NULL));
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
-
     cout << "Enter array size: ";
     int arraySize = 0;
     cin >> arraySize;
@@ -96,7 +94,7 @@ int main()
 
     // cout << c[0][0] << c[0][1] << c[0][2] << c[0][3] << c[0][4];
     // display(arraySize, c);
-    if (!isCalculationCorrect(arraySize, a, b, c)) cout << "Calculation Error\n";
+    
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     cudaStatus = cudaDeviceReset();
@@ -115,7 +113,12 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
     float* dev_a;
     float* dev_b;
     float* dev_c;
+
     cudaError_t cudaStatus;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float KernelTime;
 
     // Choose which GPU to run on, change this on a multi-GPU system.
     cudaStatus = cudaSetDevice(0);
@@ -125,32 +128,32 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
     }
 
     // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, (size * size) * sizeof(float));
+    cudaStatus = cudaMalloc((void**)&dev_c, (N * N) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_a, (size * size) * sizeof(float));
+    cudaStatus = cudaMalloc((void**)&dev_a, (N * N) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_b, (size * size) * sizeof(float));
+    cudaStatus = cudaMalloc((void**)&dev_b, (N * N) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, (size * size) * sizeof(float), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(dev_a, a, (N * N) * sizeof(float), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(dev_b, b, (size * size) * sizeof(float), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(dev_b, b, (N * N) * sizeof(float), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
@@ -158,9 +161,19 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
 
     // Launch a kernel on the GPU with one thread for each element.
 
-    int numBlocks = 1;
-    dim3 threadsPerBlock(size, size);
+    int numBlocks = BLOCK_SIZE;
+    dim3 threadsPerBlock(N, N);
+
+    cudaEventRecord(start, 0);
+    cout << "Config: numBlocks = " << numBlocks << ", threadsPerBlock(" << N << ", " << N << ")" << endl;
     addKernel <<<numBlocks, threadsPerBlock>>> (dev_c, dev_a, dev_b);
+    if (!isCalculationCorrect(size, a, b, c)) cout << "Calculation Error\n";
+    cudaThreadSynchronize();
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&KernelTime, start, stop);
+    cout << "\nGlobal result: " << KernelTime <<  " milliseconds\n";
+    //printf("KernelTime: %.2f milliseconds\n", KernelTime);
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
@@ -178,7 +191,7 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
     }
 
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, (size * size) * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(c, dev_c, (N * N) * sizeof(float), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
