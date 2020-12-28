@@ -3,114 +3,107 @@
 #include "device_launch_parameters.h"
 
 #include <stdio.h>
+#include <iostream>
 
-#include <cuda.h>
-#include <curand_kernel.h>
-#include <stdio.h>
-#include <time.h>
+using namespace std;
 
-cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
+const float degreesToRadiansCoefficient = 0.0174533;
+const int minValue = 0;
+const int maxValue = 360;
 
-__global__ void addKernel(int* c, const int* a, const int* b)
+cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size);
+
+__global__ void addKernel(float*c, const float*a, const float*b)
 {
     int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+    int j = threadIdx.y;
+    c[i * j] = a[i * j] + b[i * j];
 }
 
-__global__ void setup_kernel(curandState* state, unsigned long seed)
+void initRandom(int arraySize, float* a) 
 {
-    int id = threadIdx.x + blockIdx.x * blockDim.x;
-    curand_init(seed, id, 0, &state[id]);
-
+    for (int i = 0; i < arraySize; i++)
+        for (int j = 0; j < arraySize; j++)
+            a[i * arraySize + j] = minValue + rand() % maxValue * degreesToRadiansCoefficient;
 
 }
 
-__global__ void generate(curandState* globalState, float* randomArray)
+void initNull(int arraySize, float* a)
 {
-    // int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    // int idy = threadIdx.y + blockIdx.y * blockDim.y;
-    int ind = threadIdx.x;
-    curandState localState = globalState[ind];
-    float RANDOM = curand_uniform(&localState);
-    randomArray[ind] = RANDOM;
-    globalState[ind] = localState;
+    for (int i = 0; i < arraySize; i++)
+        for (int j = 0; j < arraySize; j++)
+            a[i * arraySize + j] = 0;
+}
 
-
+void display(int arraySize, float* a)
+{
+    for (int i = 0; i < arraySize; i++)
+    {
+        for (int j = 0; j < arraySize; j++)
+            cout << a[i * arraySize + j] << " ";
+        cout << endl;
+    }
 }
 
 int main()
 {
-    /*
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
+    srand(time(NULL));
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+
+    cout << "Enter array size: ";
+    int arraySize = 0;
+    cin >> arraySize;
+    cout <<  " Array size: " << arraySize << endl;
+    //const float a[arraySize][arraySize] = {{ 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }};
+    //const float b[arraySize][arraySize] = { { 10, 20, 30, 40, 50 }, { 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 }, };
+    //float c[arraySize][arraySize] = { {0} };
+
+    float* a = new float[arraySize * arraySize];
+    float* b = new float[arraySize * arraySize];
+    float* c = new float[arraySize * arraySize];
+
+    initRandom(arraySize, a);
+    initRandom(arraySize, b);
+    initNull(arraySize, c);
+
+    // cout << "A\n";
+    // display(arraySize, a);
+    // cout << "B\n";
+    // display(arraySize, b);
+    // cout << "C\n";
+    // display(arraySize, c);
 
     // Add vectors in parallel.
     cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
+        cout << "addWithCuda failed!\n";
+       return 1;
     }
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
-
+    // cout << c[0][0] << c[0][1] << c[0][2] << c[0][3] << c[0][4];
+    display(arraySize, c);
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
+        cout << "cudaDeviceReset failed!\n";
         return 1;
     }
 
     return 0;
-    */
-    const int N = 5;
-    curandState* devStates;
-    float* randomValues = new float[N];
-    float* devRandomValues;
-    cudaEvent_t start, end;
-    cudaEventCreate(&start);
-    cudaEventCreate(&end);
-    float timeGPU;
-
-    cudaMalloc(&devStates, N * sizeof(curandState));
-    cudaMalloc(&devRandomValues, N * sizeof(*randomValues));// setup seeds
-
-    cudaEventRecord(start, 0);
-    setup_kernel << <1, N >> > (devStates, time(NULL));
-
-    generate << <1, N >> > (devStates, devRandomValues);
-
-    cudaEventRecord(end, 0);
-
-    cudaMemcpy(randomValues, devRandomValues, N * sizeof(*randomValues), cudaMemcpyDeviceToHost);
-
-    cudaEventSynchronize(end);
-    cudaEventElapsedTime(&timeGPU, start, end);
-    printf("Time: %f\n", timeGPU * 0.001);
-
-
-    for (int i = 0; i<N; i++)
-    {
-        printf("%f , ", randomValues[i]);
-
-    }
-
-    cudaFree(devRandomValues);
-    cudaFree(devStates);
-    delete randomValues;
-    getchar();
-    return 0;
 }
 
+
 // Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size)
+cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
 {
-    int* dev_a = 0;
-    int* dev_b = 0;
-    int* dev_c = 0;
+    float* dev_a;
+    float* dev_b;
+    float* dev_c;
     cudaError_t cudaStatus;
 
     // Choose which GPU to run on, change this on a multi-GPU system.
@@ -121,39 +114,42 @@ cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size)
     }
 
     // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_c, (size * size) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_a, (size * size) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_b, (size * size) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(dev_a, a, (size * size) * sizeof(float), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(dev_b, b, (size * size) * sizeof(float), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
     }
 
     // Launch a kernel on the GPU with one thread for each element.
-    addKernel << <1, size >> > (dev_c, dev_a, dev_b);
+
+    int numBlocks = 1;
+    dim3 threadsPerBlock(size, size);
+    addKernel <<<numBlocks, threadsPerBlock>>> (dev_c, dev_a, dev_b);
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
@@ -161,7 +157,7 @@ cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size)
         fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
-
+    
     // cudaDeviceSynchronize waits for the kernel to finish, and returns
     // any errors encountered during the launch.
     cudaStatus = cudaDeviceSynchronize();
@@ -171,7 +167,7 @@ cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size)
     }
 
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(c, dev_c, (size * size) * sizeof(float), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
@@ -181,6 +177,6 @@ Error:
     cudaFree(dev_c);
     cudaFree(dev_a);
     cudaFree(dev_b);
-
+    
     return cudaStatus;
 }
