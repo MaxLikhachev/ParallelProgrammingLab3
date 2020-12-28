@@ -15,15 +15,44 @@ const float degreesToRadiansCoefficient = 0.0174533;
 const int minValue = 0;
 const int maxValue = 360;
 
-cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size);
+/* TODO:
+* fix shared memory
+* try to fix constant memory
+*/
 
-__global__ void addKernel(float*c, const float*a, const float*b)
+cudaError_t calculateWithCuda(float*c, float*a, float*b, unsigned int size);
+
+__global__ void globalCalculateKernel(float*c, float*a, float*b)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     c[i * j] = sin(a[i * j]) * sin(a[i * j]) + cos(b[i * j]) * cos(b[i * j]) * cos(b[i * j]);
 }
 
+__global__ void sharedCalculateKernel(float* c, float* a, float* b, unsigned int size)
+{
+    __shared__ float shared_a[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float shared_b[BLOCK_SIZE][BLOCK_SIZE];
+    float shared_c_temp= 0;
+
+    for (int i = size * BLOCK_SIZE * blockIdx.y; i <= size * BLOCK_SIZE * blockIdx.y + size - 1; i += BLOCK_SIZE)
+    {
+        shared_a[threadIdx.x][threadIdx.y] = a[i + size * threadIdx.y + threadIdx.x];
+        shared_b[threadIdx.x][threadIdx.y] = b[i + size * threadIdx.y + threadIdx.x];
+        shared_c_temp = shared_a[threadIdx.x][threadIdx.y] * shared_a[threadIdx.x][threadIdx.y];
+    }
+    c[size * BLOCK_SIZE * blockIdx.y + size * BLOCK_SIZE * blockIdx.y + threadIdx.y * size + threadIdx.x] = shared_c_temp;
+}
+/*
+__constant__ float constant_a[N * N];
+__constant__ float constant_b[N * N];
+__global__ void constantCalculateKernel(float* c)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    c[i * j] = sin(constant_a[i * j]) * sin(constant_a[i * j]) + cos(constant_b[i * j]) * cos(constant_b[i * j]) * cos(constant_b[i * j]);
+}
+*/
 bool isCalculationCorrect(int arraySize, float* c, const float* a, const float* b)
 {
     bool isError = true;
@@ -65,10 +94,6 @@ int main()
     cout << "Enter array size: ";
     int arraySize = 0;
     cin >> arraySize;
-    cout <<  "Array size: " << arraySize << endl;
-    //const float a[arraySize][arraySize] = {{ 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }, { 1, 2, 3, 4, 5 }};
-    //const float b[arraySize][arraySize] = { { 10, 20, 30, 40, 50 }, { 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 },{ 10, 20, 30, 40, 50 }, };
-    //float c[arraySize][arraySize] = { {0} };
 
     float* a = new float[arraySize * arraySize];
     float* b = new float[arraySize * arraySize];
@@ -78,23 +103,13 @@ int main()
     initRandom(arraySize, b);
     initNull(arraySize, c);
 
-    // cout << "A\n";
-    // display(arraySize, a);
-    // cout << "B\n";
-    // display(arraySize, b);
-    // cout << "C\n";
-    // display(arraySize, c);
-
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
+    // Add matrixes in parallel.
+    cudaError_t cudaStatus = calculateWithCuda(c, a, b, arraySize);
     if (cudaStatus != cudaSuccess) {
-        cout << "addWithCuda failed!\n";
+        cout << "calculateWithCuda failed!\n";
        return 1;
     }
 
-    // cout << c[0][0] << c[0][1] << c[0][2] << c[0][3] << c[0][4];
-    // display(arraySize, c);
-    
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     cudaStatus = cudaDeviceReset();
@@ -107,8 +122,8 @@ int main()
 }
 
 
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
+// Helper function for using CUDA to add matrixes in parallel.
+cudaError_t calculateWithCuda(float*c, float*a, float*b, unsigned int size)
 {
     float* dev_a;
     float* dev_b;
@@ -127,7 +142,7 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
         goto Error;
     }
 
-    // Allocate GPU buffers for three vectors (two input, one output)    .
+    // Allocate GPU buffers for three matrixes (two input, one output)    .
     cudaStatus = cudaMalloc((void**)&dev_c, (N * N) * sizeof(float));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
@@ -146,7 +161,7 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
         goto Error;
     }
 
-    // Copy input vectors from host memory to GPU buffers.
+    // Copy input matrixes from host memory to GPU buffers.
     cudaStatus = cudaMemcpy(dev_a, a, (N * N) * sizeof(float), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
@@ -164,21 +179,56 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
     int numBlocks = BLOCK_SIZE;
     dim3 threadsPerBlock(N, N);
 
+    cout << "Config settings: arraySize = " << size << ", numBlocks = " << numBlocks << ", threadsPerBlock(" << N << ", " << N << ")\n";
+
+
+    // Global memory
     cudaEventRecord(start, 0);
-    cout << "Config: numBlocks = " << numBlocks << ", threadsPerBlock(" << N << ", " << N << ")" << endl;
-    addKernel <<<numBlocks, threadsPerBlock>>> (dev_c, dev_a, dev_b);
-    if (!isCalculationCorrect(size, a, b, c)) cout << "Calculation Error\n";
+    globalCalculateKernel <<<numBlocks, threadsPerBlock>>> (dev_c, dev_a, dev_b);
+    // if (!isCalculationCorrect(size, dev_c, dev_a, dev_b)) cout << "Calculation Error\n";
     cudaThreadSynchronize();
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&KernelTime, start, stop);
     cout << "\nGlobal result: " << KernelTime <<  " milliseconds\n";
-    //printf("KernelTime: %.2f milliseconds\n", KernelTime);
 
+    // Shared memory
+    cudaEventRecord(start, 0);
+    sharedCalculateKernel << <numBlocks, threadsPerBlock >> > (dev_c, dev_a, dev_b, size);
+    // if (!isCalculationCorrect(size, dev_c, dev_a, dev_b)) cout << "Calculation Error\n";
+    cudaThreadSynchronize();
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&KernelTime, start, stop);
+    cout << "\Shared result: " << KernelTime << " milliseconds\n";
+
+    // Constant memory
+    /*
+    cudaEventRecord(start, 0);
+    float constant_a[N * N];
+    float constant_b[N * N];
+    cudaStatus = cudaMemcpy(constant_a, a, (N * N) * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        goto Error;
+    }
+    cudaStatus = cudaMemcpy(constant_b, b, (N * N) * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        goto Error;
+    }
+    constantCalculateKernel << <numBlocks, threadsPerBlock >> > (dev_c);
+    if (!isCalculationCorrect(size, dev_c, dev_a, dev_b)) cout << "Calculation Error\n";
+    cudaThreadSynchronize();
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&KernelTime, start, stop);
+    cout << "\nConstant result: " << KernelTime << " milliseconds\n";
+*/
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        fprintf(stderr, "globalCalculateKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
     
@@ -186,11 +236,11 @@ cudaError_t addWithCuda(float*c, float*a, float*b, unsigned int size)
     // any errors encountered during the launch.
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching globalCalculateKernel!\n", cudaStatus);
         goto Error;
     }
 
-    // Copy output vector from GPU buffer to host memory.
+    // Copy output matrix from GPU buffer to host memory.
     cudaStatus = cudaMemcpy(c, dev_c, (N * N) * sizeof(float), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
